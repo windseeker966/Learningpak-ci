@@ -622,10 +622,13 @@ struct DraftCanvas: UIViewRepresentable {
                     guard let self, let canvas, let top = DraftAnchors.latest[self.key]?[DraftAnchors.writing] else { return }
                     // 红线在第 1 个书写区，蓝线在第 2 个书写区（书写区高 520、间距 20）
                     func mark(_ y: CGFloat, _ color: UIColor) -> PKStroke {
-                        let pts = (0..<40).map { i in
-                            PKStrokePoint(location: CGPoint(x: 80 + CGFloat(i) * 12, y: y + (i % 2 == 0 ? 0 : 40)),
-                                          timeOffset: Double(i) / 60, size: CGSize(width: 8, height: 8), opacity: 1,
-                                          force: 1, azimuth: 0, altitude: .pi / 2)
+                        // 中间值拆开写明类型：写在一个表达式里，CI 上较慢的机器会类型检查超时
+                        let pts: [PKStrokePoint] = (0..<40).map { (i: Int) -> PKStrokePoint in
+                            let x: CGFloat = 80 + CGFloat(i) * 12
+                            let dy: CGFloat = i % 2 == 0 ? 0 : 40
+                            return PKStrokePoint(location: CGPoint(x: x, y: y + dy),
+                                                 timeOffset: Double(i) / 60, size: CGSize(width: 8, height: 8), opacity: 1,
+                                                 force: 1, azimuth: 0, altitude: CGFloat.pi / 2)
                         }
                         return PKStroke(ink: PKInk(.pen, color: color),
                                         path: PKStrokePath(controlPoints: pts, creationDate: .now))
