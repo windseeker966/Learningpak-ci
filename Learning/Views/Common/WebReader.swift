@@ -149,7 +149,8 @@ final class WebPage: NSObject, WKNavigationDelegate {
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webView.onLookup = { [weak self] action in self?.lookup(action) }
-        func observe<V>(_ path: KeyPath<ReaderWebView, V>, _ apply: @escaping (WebPage, ReaderWebView) -> Void) {
+        // apply 标成 @MainActor（因而是 Sendable），才能放进 KVO 的 @Sendable 回调；Xcode 26.6 起不标会报数据竞争
+        func observe<V>(_ path: KeyPath<ReaderWebView, V>, _ apply: @escaping @MainActor (WebPage, ReaderWebView) -> Void) {
             observations.append(webView.observe(path) { [weak self] web, _ in
                 MainActor.assumeIsolated { if let self { apply(self, web) } }
             })
