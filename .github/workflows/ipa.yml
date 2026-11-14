@@ -1,12 +1,9 @@
 name: IPA
 
-# 编译 iPad 真机版本，打包成 .ipa 上传为构建产物。
-# - 总是生成 Learning-unsigned.ipa：未签名，用 Sideloadly / AltStore 等工具用自己的 Apple ID 重签后安装。
-# - 如果配置了下面的 secrets，再生成 Learning-signed.ipa：已签名，可直接装到描述文件里登记过的 iPad 上。
-#   BUILD_CERTIFICATE_BASE64  开发/分发证书导出的 .p12，base64 编码
-#   P12_PASSWORD              .p12 的密码
-#   PROVISIONING_PROFILE_BASE64  对应 com.wind.studypack 的 .mobileprovision，base64 编码
-#   导出方式按描述文件自动判断：开发描述文件 → debugging，Ad Hoc 描述文件 → release-testing
+# 编译 iPad 真机版本（Debug，和本地 Xcode 装到 iPad 上的一样），不签名，打包成 Learning-unsigned.ipa 上传为构建产物。
+# 免费 Apple ID 的描述文件只能在 Mac 上由 Xcode 申请、7 天到期，所以签名和安装放在 Mac 上做：
+# 私有仓库的 `PackFormat/resign.sh ci` 下载最新的产物，用 xcodebuild -exportArchive 签名，备份后装到 iPad。
+# 产物里的 SOURCE_REV 是这份代码对应的私有仓库提交号（由 tools/sync-public.sh 写入）。
 
 on:
   push:
@@ -21,8 +18,6 @@ jobs:
   ipa:
     runs-on: macos-26
     timeout-minutes: 40
-    env:
-      HAS_SIGNING: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && secrets.PROVISIONING_PROFILE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,131 +33,37 @@ jobs:
           key: spm-${{ runner.os }}-${{ hashFiles('Learning.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: spm-${{ runner.os }}-
 
-      - name: 编译真机版本（Release，不签名）
+      - name: 编译真机版本（Debug，不签名）
         run: |
           set -o pipefail
           xcodebuild \
             -project Learning.xcodeproj \
             -scheme Learning \
-            -configuration Release \
+            -configuration Debug \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             -clonedSourcePackagesDirPath SourcePackages \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tee xcodebuild-unsigned.log | grep -E '(error|warning):|BUILD (SUCCEEDED|FAILED)' || true
-          grep -q 'BUILD SUCCEEDED' xcodebuild-unsigned.log
+            build 2>&1 | tee xcodebuild.log | grep -E '(error|warning):|BUILD (SUCCEEDED|FAILED)' || true
+          grep -q 'BUILD SUCCEEDED' xcodebuild.log
 
-      - name: 打包未签名 IPA
+      - name: 打包 IPA
         run: |
-          APP=build/Build/Products/Release-iphoneos/Learning.app
+          APP=build/Build/Products/Debug-iphoneos/Learning.app
           [ -d "$APP" ] || { echo "找不到 $APP"; ls build/Build/Products; exit 1; }
           mkdir -p out/Payload
           cp -R "$APP" out/Payload/
           (cd out && zip -qry Learning-unsigned.ipa Payload && rm -rf Payload)
-          ls -lh out
-
-      - name: 导入签名证书和描述文件
-        if: env.HAS_SIGNING == 'true'
-        env:
-          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-          PROVISIONING_PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
-        run: |
-          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
-          KEYCHAIN_PASSWORD="$(uuidgen)"
-          echo "$BUILD_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          echo "$PROVISIONING_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-
-          security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$RUNNER_TEMP/profile.plist"
-          UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/profile.plist")
-          TEAM=$(/usr/libexec/PlistBuddy -c 'Print TeamIdentifier:0' "$RUNNER_TEMP/profile.plist")
-          NAME=$(/usr/libexec/PlistBuddy -c 'Print Name' "$RUNNER_TEMP/profile.plist")
-          if [ "$(/usr/libexec/PlistBuddy -c 'Print Entitlements:get-task-allow' "$RUNNER_TEMP/profile.plist" 2>/dev/null)" = "true" ]; then
-            METHOD=debugging
-          else
-            METHOD=release-testing
-          fi
-          # 用证书的 SHA-1 指定签名身份，不管是 Apple Development 还是 Apple Distribution 都能用
-          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')
-          [ -n "$IDENTITY" ] || { echo "p12 里没有可用的签名证书"; exit 1; }
-          PROFILES="$HOME/Library/MobileDevice/Provisioning Profiles"
-          mkdir -p "$PROFILES"
-          cp "$RUNNER_TEMP/profile.mobileprovision" "$PROFILES/$UUID.mobileprovision"
-          # Xcode 16+ 也会读这个目录
-          mkdir -p "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
-          cp "$RUNNER_TEMP/profile.mobileprovision" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$UUID.mobileprovision"
-
-          {
-            echo "KEYCHAIN=$KEYCHAIN"
-            echo "PROFILE_UUID=$UUID"
-            echo "PROFILE_NAME=$NAME"
-            echo "TEAM_ID=$TEAM"
-            echo "EXPORT_METHOD=$METHOD"
-            echo "SIGN_IDENTITY=$IDENTITY"
-          } >> "$GITHUB_ENV"
-          echo "描述文件：$NAME（$UUID），团队 $TEAM，导出方式 $METHOD"
-
-      - name: 归档并导出已签名 IPA
-        if: env.HAS_SIGNING == 'true'
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -project Learning.xcodeproj \
-            -scheme Learning \
-            -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build \
-            -clonedSourcePackagesDirPath SourcePackages \
-            -skipPackagePluginValidation \
-            -archivePath "$RUNNER_TEMP/Learning.xcarchive" \
-            CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" \
-            CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
-            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN" \
-            archive 2>&1 | tee xcodebuild-signed.log | grep -E '(error|warning):|ARCHIVE (SUCCEEDED|FAILED)' || true
-          grep -q 'ARCHIVE SUCCEEDED' xcodebuild-signed.log
-
-          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key><string>$EXPORT_METHOD</string>
-            <key>teamID</key><string>$TEAM_ID</string>
-            <key>signingStyle</key><string>manual</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>com.wind.studypack</key><string>$PROFILE_UUID</string>
-            </dict>
-            <key>compileBitcode</key><false/>
-            <key>stripSwiftSymbols</key><true/>
-          </dict>
-          </plist>
-          EOF
-
-          xcodebuild -exportArchive \
-            -archivePath "$RUNNER_TEMP/Learning.xcarchive" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -exportPath "$RUNNER_TEMP/export" 2>&1 | tee -a xcodebuild-signed.log
-          mv "$RUNNER_TEMP"/export/*.ipa out/Learning-signed.ipa
+          cp SOURCE_REV out/ 2>/dev/null || echo unknown > out/SOURCE_REV
+          echo "私有仓库提交：$(cat out/SOURCE_REV)"
           ls -lh out
 
       - name: 上传 IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Learning-ipa-${{ github.run_number }}
-          path: out/*.ipa
+          name: Learning-ipa
+          path: out/
           if-no-files-found: error
           retention-days: 30
 
@@ -171,9 +72,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ipa-build-log
-          path: xcodebuild-*.log
+          path: xcodebuild.log
           if-no-files-found: ignore
-
-      - name: 清理钥匙串
-        if: always() && env.HAS_SIGNING == 'true'
-        run: security delete-keychain "$KEYCHAIN" || true

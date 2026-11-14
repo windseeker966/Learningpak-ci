@@ -10,10 +10,4 @@ iPad 学习 App 的源码镜像，只用来在 GitHub Actions 上检查能否编
 
 ## iPad 安装包（`.github/workflows/ipa.yml`）
 
-每次推送到 `main` 都会编译真机 Release 版本，在 Actions 运行页面的 Artifacts 里下载 `Learning-ipa-<编号>`：
-
-- `Learning-unsigned.ipa`：未签名。用 [Sideloadly](https://sideloadly.io/) 或 AltStore 登录自己的 Apple ID 重签后装到 iPad（免费账号 7 天过期，需要重签）。
-- `Learning-signed.ipa`：仓库配置了下面的 secrets 才会生成，已签名，可以直接装到描述文件里登记过的 iPad 上（如用 Apple Configurator、`xcrun devicectl device install app` 或爱思助手）。
-  - `BUILD_CERTIFICATE_BASE64`：签名证书导出的 `.p12`，`base64 -i cert.p12 | pbcopy`
-  - `P12_PASSWORD`：`.p12` 的密码
-  - `PROVISIONING_PROFILE_BASE64`：`com.wind.studypack` 的开发或 Ad Hoc 描述文件，`base64 -i x.mobileprovision | pbcopy`
+每次推送到 `main` 都编译未签名的真机 Debug 版本，产物 `Learning-ipa` 里是 `Learning-unsigned.ipa` 和对应的私有仓库提交号 `SOURCE_REV`。免费 Apple ID 的描述文件只能在 Mac 上由 Xcode 申请，所以签名和安装在 Mac 上用私有仓库的 `PackFormat/resign.sh ci` 做。
