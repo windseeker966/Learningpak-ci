@@ -558,6 +558,7 @@ enum RecordMaintenance {
         let progress = try context.fetch(FetchDescriptor<SectionProgress>(predicate: #Predicate { $0.key == key }))
         progress.forEach(context.delete)
         summary.progress = progress.count
+        PendingAnswers.removeChoices(pack: packID, questionIDs: questionIDs)
 
         try context.save()
         return summary

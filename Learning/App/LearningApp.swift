@@ -43,6 +43,7 @@ struct LearningApp: App {
         RecordMaintenance.purgeAIVariantRecords(in: container.mainContext)
         RecordMaintenance.migrateVariantFaultsOnce(in: container.mainContext)
         ReviewScheduler.migrateOnce(in: container.mainContext)
+        PendingAnswers.purgeStale()
         LectureCache.purgeMetaphors(in: container.mainContext)
         // import_vocab.sh 以环境变量启动时导入生词
         VocabImport.runIfRequested(in: container.mainContext)

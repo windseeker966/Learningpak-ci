@@ -117,6 +117,11 @@ enum PhoneSyncImport {
                                               confusedPoints: nil, types: types)]
         }
         context.insert(record)
+        // iPad 复习页这道题在这之前没提交的作答作废：手机上已经做过了
+        let pendingKey = PendingAnswers.choiceKey(pack: packID, mode: .review, questionID: qid)
+        if let p = PendingAnswers.load(PendingAnswers.Choice.self, key: pendingKey), p.savedAt < at {
+            PendingAnswers.remove(key: pendingKey)
+        }
         if !graded.isCorrect { PhraseDeck.recordMiss(packID: packID, question: q, selection: record.selection, at: at, in: context) }
         return true
     }

@@ -77,6 +77,7 @@ struct ReadingPracticeCard: View {
         }
         .onAppear(perform: load)
         .onDisappear { runner.cancel() }
+        .onChange(of: typed) { if currentID == nil { savePending() } }
     }
 
     // MARK: - 题面
@@ -241,6 +242,19 @@ struct ReadingPracticeCard: View {
         guard !loaded else { return }
         loaded = true
         currentID = records.first?.id
+        // 上次没提交的（或点了「再写一次」还没提交的）接着写
+        if let p = PendingAnswers.load(PendingAnswers.Reading.self, key: pendingKey),
+           records.first.map({ p.savedAt > $0.createdAt }) ?? true {
+            currentID = nil
+            typed = p.value.typed
+        }
+    }
+
+    private var pendingKey: String { PendingAnswers.readingKey(pack: pack.id, itemID: itemID) }
+
+    /// 键盘输入随时存下；点了「再写一次」也存一条（内容为空），下次打开时停在作答中，不显示上次的结果
+    private func savePending() {
+        PendingAnswers.save(PendingAnswers.Reading(typed: typed), key: pendingKey)
     }
 
     private func submit() {
@@ -251,6 +265,7 @@ struct ReadingPracticeCard: View {
             error = "还没有写内容：在书写区手写，或在输入框里输入。"
             return
         }
+        PendingAnswers.remove(key: pendingKey)
         let system: String, user: String
         let onSave: (String, Bool, LLMUsage?) -> Void
         switch item {
@@ -306,6 +321,7 @@ struct ReadingPracticeCard: View {
         currentID = nil
         typed = ""
         error = nil
+        savePending()
     }
 
     /// 有笔迹的书写区各一张截图，书写区外的笔迹另成一张；没有笔迹时为空

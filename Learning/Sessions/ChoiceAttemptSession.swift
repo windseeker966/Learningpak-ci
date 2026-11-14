@@ -72,9 +72,19 @@ final class ChoiceAttemptSession {
         self.isNestedRedo = isNestedRedo
         self.inkKey = inkKey
         self.shuffleOptions = shuffleOptions
-        optionOrder = existing.map { OptionOrder(displayed: $0.optionOrder, original: question.optionKeys) }
-            ?? Self.optionOrder(for: question, shuffle: shuffleOptions)
-        if let e = existing {
+        optionOrder = Self.optionOrder(for: question, shuffle: shuffleOptions)
+        // 上次没提交的作答（重新作答后没提交的也算）接着做；比已有的作答晚才算，题目内容变了不算
+        if !mode.isAI, let p = PendingAnswers.load(PendingAnswers.Choice.self, key: choiceKey),
+           p.value.contentHash == Grader.contentHash(question), existing.map({ p.savedAt > $0.createdAt }) ?? true {
+            let d = p.value
+            optionOrder = OptionOrder(displayed: d.optionOrder, original: question.optionKeys)
+            selection = d.selection.map { Selection.decode($0, for: question) }
+            history = d.history
+            selectionTimes = d.selectionTimes
+            hintShown = d.hintShown
+            answerClock.reset(to: d.answerSeconds)
+        } else if let e = existing {
+            optionOrder = OptionOrder(displayed: e.optionOrder, original: question.optionKeys)
             let sel = Selection.decode(e.selection, for: question)
             selection = sel
             history = e.selectionHistory
@@ -89,8 +99,19 @@ final class ChoiceAttemptSession {
             pendingErrorTypes = Set(e.causeTypes)
             errorNote = e.errorNote ?? ""
             restoredAt = e.createdAt
+            // 上次改了没提交的错因
+            if !mode.isAI, let c = PendingAnswers.load(PendingAnswers.Cause.self, key: causeKey)?.value,
+               abs(c.attemptAt.timeIntervalSince(e.createdAt)) < 0.001 {
+                pendingErrorTypes = Set(c.errorTypes.compactMap(ErrorType.init(rawValue:)))
+                errorNote = c.note
+                pendingConfused = c.confusedPoints
+                editingCause = c.editing
+            }
         }
     }
+
+    private var choiceKey: String { PendingAnswers.choiceKey(pack: pack.id, mode: mode, questionID: question.id) }
+    private var causeKey: String { PendingAnswers.causeKey(pack: pack.id, mode: mode, questionID: question.id) }
 
     private var q: Question { question }
 
@@ -165,10 +186,30 @@ final class ChoiceAttemptSession {
         ChoiceInk.save(attempt, pageKey: key, since: since, in: context)
     }
 
-    /// 离开页面或 App 退到后台：保存讲评和笔迹
+    /// 离开页面或 App 退到后台：保存讲评、笔迹和还没提交的作答、错因
     func persist() {
         review.save()
         captureInk()
+        savePending()
+    }
+
+    /// 还没提交的作答、错因存下来，下次打开这道题时接着用（见 PendingAnswers）；AI 改编题不存
+    private func savePending() {
+        guard !mode.isAI else { return }
+        if result == nil {
+            guard selection != nil || hintShown else { return }
+            PendingAnswers.save(PendingAnswers.Choice(
+                selection: selection?.encoded, history: history, selectionTimes: selectionTimes,
+                hintShown: hintShown, answerSeconds: answerClock.elapsed, optionOrder: optionOrder.keys,
+                contentHash: Grader.contentHash(q)), key: choiceKey)
+        } else if let attempt, errorTypes.isEmpty || editingCause {
+            let changed = pendingErrorTypes != Set(errorTypes) || pendingConfused != confusedPoints
+                || errorNote != (attempt.errorNote ?? "")
+            guard changed else { PendingAnswers.remove(key: causeKey); return }
+            PendingAnswers.save(PendingAnswers.Cause(
+                attemptAt: attempt.createdAt, errorTypes: ErrorType.allCases.filter(pendingErrorTypes.contains).map(\.rawValue),
+                note: errorNote, confusedPoints: pendingConfused, editing: editingCause), key: causeKey)
+        }
     }
 
     // MARK: - 作答、提交
@@ -177,14 +218,19 @@ final class ChoiceAttemptSession {
         selection = sel
         history.append(sel.encoded)
         selectionTimes.append(answerClock.elapsed)
+        savePending()
     }
 
-    func showHint() { hintShown = true }
+    func showHint() {
+        hintShown = true
+        savePending()
+    }
 
     /// 提交并判分，返回这次的作答记录（AI 改编题的只在内存里）
     @discardableResult
     func submit(confidence: ChoiceConfidence) -> AttemptRecord? {
         guard let context, let selection, selection.isComplete else { return nil }
+        PendingAnswers.remove(key: choiceKey)
         let r = Grader.grade(q, selection)
         let duration = answerClock.elapsed
         let record = AttemptRecord(
@@ -277,6 +323,8 @@ final class ChoiceAttemptSession {
     func resetForRetry() {
         leave()
         captureInk()
+        PendingAnswers.remove(key: choiceKey)
+        PendingAnswers.remove(key: causeKey)
         inkSince = nil
         openedAt = .now
         review.save()
@@ -327,6 +375,7 @@ final class ChoiceAttemptSession {
         pendingConfused = confusedPoints
         errorNote = attempt?.errorNote ?? ""
         editingCause = false
+        PendingAnswers.remove(key: causeKey)
     }
 
     var canSubmitCause: Bool {
@@ -336,6 +385,7 @@ final class ChoiceAttemptSession {
 
     func submitCause() {
         guard let context, canSubmitCause else { return }
+        if !mode.isAI { PendingAnswers.remove(key: causeKey) }
         let types = ErrorType.allCases.filter(pendingErrorTypes.contains)
         let raws = types.map(\.rawValue)
         let note = errorNote.trimmingCharacters(in: .whitespacesAndNewlines)

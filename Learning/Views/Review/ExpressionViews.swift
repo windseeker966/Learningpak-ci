@@ -117,6 +117,12 @@ private struct ExpressionQuestionList: View {
     private func prepare(_ i: Int, force: Bool = false, useBackup: Bool = false) {
         guard i < entries.count, force || (questions[i] == nil && tasks[i] == nil) else { return }
         let entry = entries[i]
+        let pendingKey = PendingAnswers.expressionKey(entryKey: entry.key)
+        // 上次出了题还没提交的接着做这一句
+        if !force, let p = PendingAnswers.load(PendingAnswers.Expression.self, key: pendingKey)?.value {
+            questions[i] = .success(ExpressionQuestion(chinese: p.chinese, reference: p.reference))
+            return
+        }
         let user = ReadingPracticePrompts.expressionQuestionUser(entry: entry,
                                                                 history: ExpressionBook.attempts(of: entry, in: context))
         let config = useBackup ? (LLMConfig.backup() ?? .current(.readingPractice)) : .current(.readingPractice)
@@ -129,7 +135,11 @@ private struct ExpressionQuestionList: View {
                     .complete(system: ReadingPracticePrompts.expressionQuestionSystem,
                               messages: [ChatTurn(role: .user, text: user)], maxTokens: 600)
                 guard !Task.isCancelled else { return }
-                questions[i] = .success(try ExpressionQuestion(result.text))
+                let q = try ExpressionQuestion(result.text)
+                questions[i] = .success(q)
+                // 出好的句子先存下：没做完就离开，下次还做这一句
+                PendingAnswers.save(PendingAnswers.Expression(chinese: q.chinese, reference: q.reference,
+                                                              typed: "", usedHint: false), key: pendingKey)
             } catch {
                 guard !Task.isCancelled else { return }
                 questions[i] = .failure(error)
@@ -142,6 +152,11 @@ private struct ExpressionQuestionList: View {
 struct ExpressionQuestion {
     let chinese: String
     let reference: String
+
+    init(chinese: String, reference: String) {
+        self.chinese = chinese
+        self.reference = reference
+    }
 
     struct InvalidOutput: LocalizedError {
         var errorDescription: String? { "AI 的回答不是预期的格式，请重试。" }
@@ -211,7 +226,26 @@ private struct ExpressionQuestionCard: View {
             }
             if let attempt { result(attempt) }
         }
+        .onAppear(perform: restorePending)
         .onDisappear { runner.cancel() }
+        .onChange(of: typed) { savePending() }
+        .onChange(of: showHint) { savePending() }
+    }
+
+    private var pendingKey: String { PendingAnswers.expressionKey(entryKey: entry.key) }
+
+    /// 上次没提交的键盘输入、看没看提示（同一句才算）
+    private func restorePending() {
+        guard attempt == nil, let p = PendingAnswers.load(PendingAnswers.Expression.self, key: pendingKey)?.value,
+              p.chinese == question.chinese else { return }
+        typed = p.typed
+        showHint = p.usedHint
+    }
+
+    private func savePending() {
+        guard attempt == nil else { return }
+        PendingAnswers.save(PendingAnswers.Expression(chinese: question.chinese, reference: question.reference,
+                                                      typed: typed, usedHint: showHint), key: pendingKey)
     }
 
     @ViewBuilder
@@ -287,6 +321,7 @@ private struct ExpressionQuestionCard: View {
         let images = skipped ? [] : ReadingPracticeCard.handwritingImages(LiveDraft.drawing(draftKey), frames: areaFrames)
         let a = ExpressionAttempt(entryKey: entry.key, chinese: question.chinese, reference: question.reference,
                                   usedHint: showHint, answer: text, inkImages: images)
+        PendingAnswers.remove(key: pendingKey)
         context.insert(a)
         try? context.save()
         attempt = a
