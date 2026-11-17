@@ -20,7 +20,7 @@ nonisolated enum MacStudyReport {
         return last.minutes != minutes && now.timeIntervalSince(last.at) >= minGap
     }
 
-    /// 放进中转服务器 study 信箱的内容
+    /// POST /study 的请求体
     static func body(day: String, seconds: TimeInterval, starts: Int, active: Bool, now: Date) -> [String: Any] {
         ["v": 1, "sentAt": Int64((now.timeIntervalSince1970 * 1000).rounded()), "day": day,
          "seconds": Int(seconds), "starts": starts, "active": active]

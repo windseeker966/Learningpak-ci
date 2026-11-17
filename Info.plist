@@ -19,11 +19,6 @@
 		</dict>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>和手机上的复习 App 同步今天的复习题和作答；连接你在模型供应商设置中填写的局域网 AI 服务。</string>
-	<!-- 用 Bonjour 找手机复习 App（learningpack-android）的同步服务 -->
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_lpreview._tcp</string>
-	</array>
+	<string>连接你在模型供应商设置中填写的局域网 AI 服务。</string>
 </dict>
 </plist>

@@ -1,15 +1,13 @@
 import Foundation
 import Network
 
-/// 连接手机复习 App（learningpack-android）：用 Bonjour 找到手机，发签名的 HTTP 请求。协议见 learningpack-android/PROTOCOL.md。
-/// 手机是服务端（端口固定），iPad 在前台时主动连它；宿舍里两台设备连同一个 Wi-Fi，在外面 iPad 连手机的热点。
-/// HTTP 用 Network.framework 直接收发：连的是局域网 IP 上的明文 HTTP，不经过 URLSession 的 ATS 限制
+/// 经 Tailscale 发签名的 HTTP 请求：连手机复习 App（learningpack-android），也用来发给 Mac（MacReport）。协议见 learningpack-android/PROTOCOL.md。
+/// 手机是服务端（端口固定），iPad 在前台时连它的 Tailscale 地址；两台设备都连着 Tailscale 就行，不用在同一个网络。
+/// HTTP 用 Network.framework 直接收发：连的是 Tailscale IP 上的明文 HTTP（Tailscale 本身加密），不经过 URLSession 的 ATS 限制
 nonisolated enum PhoneLink {
-    static let serviceType = "_lpreview._tcp"
     static let port: UInt16 = 47321
 
     enum LinkError: LocalizedError {
-        case notFound
         case timeout
         case badResponse(String)
         case http(Int, String)
@@ -17,42 +15,12 @@ nonisolated enum PhoneLink {
 
         var errorDescription: String? {
             switch self {
-            case .notFound: "没找到手机：确认手机上的复习 App 开着，并和 iPad 在同一个 Wi-Fi 或连着手机热点"
-            case .timeout: "连接手机超时"
+            case .timeout: "连接超时：确认两台设备都连着 Tailscale，对方的 App 开着"
             case .badResponse(let s): "手机的回应看不懂：\(s)"
             case .http(401, _): "配对密钥不对：在手机复习 App 的设置里看密钥，填到这里"
             case .http(let code, let s): "手机返回错误 \(code)：\(s)"
             case .badSignature: "手机回应的签名不对，配对密钥可能不一致"
             }
-        }
-    }
-
-    // MARK: - 发现
-
-    /// 用 Bonjour 找手机，返回它在 TXT 记录里报的 IPv4（Wi-Fi 的在前、热点的在后，逗号分隔）；timeout 秒内没找到为空
-    static func discover(timeout: TimeInterval = 3) async -> [String] {
-        await withCheckedContinuation { (cont: CheckedContinuation<[String], Never>) in
-            let browser = NWBrowser(for: .bonjourWithTXTRecord(type: serviceType, domain: nil), using: .tcp)
-            let queue = DispatchQueue(label: "PhoneLink.discover")
-            let once = Once()
-            @Sendable func finish(_ hosts: [String]) {
-                guard once.claim() else { return }
-                browser.cancel()
-                cont.resume(returning: hosts)
-            }
-            browser.browseResultsChangedHandler = { results, _ in
-                for r in results {
-                    if case .bonjour(let txt) = r.metadata, let ip = txt["ip"], !ip.isEmpty {
-                        finish(ip.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
-                        return
-                    }
-                }
-            }
-            browser.stateUpdateHandler = { state in
-                if case .failed = state { finish([]) }
-            }
-            browser.start(queue: queue)
-            queue.asyncAfter(deadline: .now() + timeout) { finish([]) }
         }
     }
 
@@ -82,18 +50,6 @@ nonisolated enum PhoneLink {
         return response.body
     }
 
-    /// 不签名的请求（中转服务器用，内容另外加密过，见 PhoneRelay），返回状态码和响应体
-    static func plainRequest(host: String, port: UInt16, method: String, path: String, body: Data = Data(),
-                             timeout: TimeInterval = 15) async throws -> (status: Int, body: Data) {
-        var head = "\(method) \(path) HTTP/1.1\r\n"
-        head += "Host: \(host):\(port)\r\n"
-        head += "Content-Type: application/octet-stream\r\n"
-        head += "Content-Length: \(body.count)\r\n"
-        head += "Connection: close\r\n\r\n"
-        let response = try parse(try await exchange(host: host, port: port, request: Data(head.utf8) + body, timeout: timeout))
-        return (response.status, response.body)
-    }
-
     /// 连上、发出请求、收到对方关闭连接为止的全部字节
     private static func exchange(host: String, port: UInt16, request: Data, timeout: TimeInterval) async throws -> Data {
         let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
@@ -121,7 +77,7 @@ nonisolated enum PhoneLink {
                     })
                 case .failed(let error): finish(.failure(error))
                 case .waiting(let error):
-                    // 没有路由（不在同一个网络、没联网）时一直等着，不如直接失败
+                    // 没有路由（Tailscale 没连上、没联网）时一直等着，不如直接失败
                     finish(.failure(error))
                 default: break
                 }
