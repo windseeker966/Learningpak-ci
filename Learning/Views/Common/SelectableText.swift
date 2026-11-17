@@ -248,7 +248,7 @@ enum RichText {
     }
 
     /// 题面用 unescape: true：题面基本按纯文本显示，去掉录入时照 Markdown 写的转义（\*、\$），
-    /// 并显示 ``` 代码块、`行内代码`、**加粗**（见 makePlain）
+    /// 并显示 ``` 代码块、`行内代码`、**加粗**、列表（见 makePlain）；题面里的表格由 StemView 单独排
     static func plain(_ s: String, style: UIFont.TextStyle = .body, color: UIColor = .label,
                       unescape: Bool = false, scale: CGFloat) -> NSAttributedString {
         cached("plain|\(style.rawValue)|\(color.hash)|\(unescape)|\(scale)|\(s)") {
@@ -265,8 +265,10 @@ enum RichText {
             switch block {
             case .code(let code):
                 appendCodeBlock(code, to: out, base: base, color: color)
-            case .text(let text):
+            case .text(let raw):
                 let start = out.length
+                var listLevels: [Int] = []
+                let text = unescape ? markingListItems(raw, levels: &listLevels) : raw
                 for segment in MathSplitter.split(text) {
                     switch segment {
                     case .text(let t):
@@ -282,9 +284,45 @@ enum RichText {
                 let p = NSMutableParagraphStyle()
                 p.lineSpacing = 4
                 out.addAttribute(.paragraphStyle, value: p, range: NSRange(location: start, length: out.length - start))
+                if !listLevels.isEmpty { applyListStyles(out, from: start, levels: listLevels) }
             }
         }
         return out
+    }
+
+    /// 把列表行（- 项、1. 项）的标记换成「• + 制表符」「1. + 制表符」，按出现顺序记下各项的缩进层级
+    private static func markingListItems(_ s: String, levels: inout [Int]) -> String {
+        guard s.contains(where: { "-*+.)".contains($0) }) else { return s }
+        var lines: [String] = []
+        for line in s.split(separator: "\n", omittingEmptySubsequences: false) {
+            if let item = MarkdownParser.listItem(String(line)) {
+                levels.append(item.level)
+                lines.append(item.marker + "\t" + item.text)
+            } else {
+                lines.append(String(line))
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 以「标记 + 制表符」开头的段落按出现顺序配上层级，设悬挂缩进，续行和标记后的文字对齐
+    private static func applyListStyles(_ out: NSMutableAttributedString, from start: Int, levels: [Int]) {
+        let ns = out.string as NSString
+        let marker = try! NSRegularExpression(pattern: "^(•|\\d{1,3}\\.)\t")
+        var next = 0
+        ns.enumerateSubstrings(in: NSRange(location: start, length: ns.length - start), options: .byParagraphs) { para, range, _, _ in
+            guard let para, next < levels.count,
+                  marker.firstMatch(in: para, range: NSRange(location: 0, length: (para as NSString).length)) != nil else { return }
+            let indent = CGFloat(levels[next]) * 20
+            next += 1
+            let p = NSMutableParagraphStyle()
+            p.lineSpacing = 4
+            p.paragraphSpacing = 4
+            p.firstLineHeadIndent = indent
+            p.headIndent = indent + 28
+            p.tabStops = [NSTextTab(textAlignment: .left, location: indent + 28)]
+            out.addAttribute(.paragraphStyle, value: p, range: range)
+        }
     }
 
     /// 题面里按行切出 ``` 围起来的代码块；没有收尾的 ``` 一直算到结尾

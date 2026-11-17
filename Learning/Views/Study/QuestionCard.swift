@@ -97,8 +97,7 @@ struct QuestionCard: View {
                 header
                 // 改编练习什么都不记，没有有错标记
                 if mode != .aiPractice { QuestionFaultBanner(packID: pack.id, questionID: q.id, variant: mode.isAI) }
-                SelectableText(attributed: RichText.plain(displayStem, style: .title3, unescape: true, scale: renderScale),
-                               source: "题面", onAction: nil)
+                StemView(text: displayStem)
                 ForEach(q.figures ?? [], id: \.self) { id in
                     if let f = pack.figures[id] { FigureView(pack: pack, figure: f) }
                 }

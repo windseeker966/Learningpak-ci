@@ -223,8 +223,7 @@ struct SubjectiveCard: View {
                 }
                 QuestionFaultBanner(packID: pack.id, questionID: variant.id, variant: true)
                 if let stem = question.stem {
-                    SelectableText(attributed: RichText.plain(stem, style: .title3, unescape: true, scale: renderScale),
-                                   source: "AI 改编题题面", onAction: nil)
+                    StemView(text: stem, source: "AI 改编题题面")
                 }
                 QuestionToolsRow(packID: pack.id, questionID: variant.id, onAIVariant: nil,
                                  originalID: variant.original.id)
@@ -266,8 +265,7 @@ struct SubjectiveCard: View {
             }
             QuestionFaultBanner(packID: pack.id, questionID: question.id)
             if let stem = question.stem {
-                SelectableText(attributed: RichText.plain(stem, style: .title3, unescape: true, scale: renderScale),
-                               source: "题面", onAction: nil)
+                StemView(text: stem)
             }
             if let path = question.questionImage {
                 OriginalPageImage(url: pack.root.appending(path: path), title: "原题")

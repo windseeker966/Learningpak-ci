@@ -399,7 +399,7 @@ enum MarkdownParser {
         return (hashes, String(line.dropFirst(hashes + 1)))
     }
 
-    private static func listItem(_ raw: String) -> MarkdownBlock.ListItem? {
+    static func listItem(_ raw: String) -> MarkdownBlock.ListItem? {
         let indent = raw.prefix { $0 == " " }.count
         let line = raw.dropFirst(indent)
         let level = indent / 2
@@ -416,14 +416,14 @@ enum MarkdownParser {
         return nil
     }
 
-    private static func isTableSeparator(_ line: String) -> Bool {
+    static func isTableSeparator(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)
         guard t.hasPrefix("|"), t.contains("-") else { return false }
         return t.allSatisfy { "|-: ".contains($0) }
     }
 
     /// 按 | 分列。公式（$…$、$$…$$、\(…\)）里的 | 不是分隔符；公式外的 \| 是单元格里的竖线
-    private static func cells(_ line: String) -> [String] {
+    static func cells(_ line: String) -> [String] {
         var t = line.trimmingCharacters(in: .whitespaces)
         if t.hasPrefix("|") { t.removeFirst() }
         if t.hasSuffix("|") && !t.hasSuffix("\\|") { t.removeLast() }
